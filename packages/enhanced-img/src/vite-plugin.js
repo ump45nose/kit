@@ -51,7 +51,11 @@ export function image_plugin(imagetools_plugin) {
 			async handler(content, filename) {
 				const plugin_context = this;
 				const s = new MagicString(content);
-				const ast = parse(content, { filename, modern: true });
+				// Blank style bodies before parse so SCSS/Less/etc. that is not
+				// yet CSS does not fail the full Svelte parser (#17545). Offsets
+				// stay aligned with `content` because each non-newline is replaced
+				// by a space of the same UTF-16 length.
+				const ast = parse(blank_styles(content), { filename, modern: true });
 
 				/**
 				 * Import path to import name
@@ -246,6 +250,24 @@ async function process_id(resolved_id, plugin_context, imagetools_plugin) {
 /**
  * @param {string} str
  */
+/**
+ * Replace `<style>` bodies with spaces (newlines kept) so the full Svelte
+ * parser can read markup when the stylesheet is still SCSS/Less/etc.
+ * Matches the style-tag regex used by `svelte`'s `preprocess()`.
+ * @param {string} code
+ */
+export function blank_styles(code) {
+	return code.replace(
+		/<!--[^]*?-->|<style((?:\s+[^=>'"/\s]+=(?:"[^"]*"|'[^']*'|[^>\s]+)|\s+[^=>'"/\s]+)*\s*)(?:\/>|>([\S\s]*?)<\/style>)/g,
+		(match, _attributes, body) =>
+			body === undefined
+				? match
+				: match.slice(0, -body.length - '</style>'.length) +
+					body.replace(/[^\n]/g, ' ') +
+					'</style>'
+	);
+}
+
 export function parse_object(str) {
 	const updated = str
 		.replaceAll(/{(\n\s*)?/gm, '{"')

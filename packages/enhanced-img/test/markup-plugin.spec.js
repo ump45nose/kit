@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { compile } from 'svelte/compiler';
 import { expect, it } from 'vitest';
-import { image_plugin, parse_object } from '../src/vite-plugin.js';
+import { blank_styles, image_plugin, parse_object } from '../src/vite-plugin.js';
 
 const resolve = /** @param {string} file */ (file) => path.resolve(import.meta.dirname, file);
 
@@ -84,4 +84,46 @@ it('parses a non-minimized object', () => {
 		}`
 	);
 	expect(parsed).toBeDefined();
+});
+
+it('parses components whose style is still SCSS (#17545)', async () => {
+	const filename = 'ScssStyle.svelte';
+	const source = `<enhanced:img src="./dev.png" alt="" />\n\n<style lang="scss">\n\t// line comment, valid SCSS\n\timg {\n\t\twidth: 100%;\n\t}\n</style>\n`;
+	const vite_plugin = image_plugin({
+		name: 'vite-imagetools-mock',
+		load() {
+			return 'export default {sources:{png:"/x 1w"},img:{src:"/x",w:1,h:1}};';
+		}
+	});
+	const plugin_context = /** @type {import('vite').Rollup.TransformPluginContext} */ (
+		/** @type {unknown} */ ({
+			// @ts-ignore
+			resolve(url) {
+				return { id: url };
+			}
+		})
+	);
+	const transform =
+		/** @type {(this: import('vite').Rollup.TransformPluginContext, code: string, id: string, options?: {ssr?: boolean;}) => Promise<import('vite').Rollup.TransformResult>} */ (
+			// @ts-expect-error fails until vite is updated
+			vite_plugin.transform.handler
+		);
+	const transformed = await transform.call(plugin_context, source, filename);
+	if (!transformed || typeof transformed === 'string' || !transformed.code) {
+		throw new Error('transform unexpectedly returned no results');
+	}
+	expect(transformed.code).toContain('<picture>');
+	expect(transformed.code).toContain('// line comment, valid SCSS');
+});
+
+it('blank_styles keeps offsets by replacing style bodies with spaces', () => {
+	const code = '<p>x</p>\n<style lang="scss">\n\t// hi\n\timg { color: red; }\n</style>\n';
+	const blanked = blank_styles(code);
+	expect(blanked.length).toBe(code.length);
+	expect(blanked).toContain('<style lang="scss">');
+	expect(blanked).toContain('</style>');
+	expect(blanked).not.toContain('// hi');
+	expect(blanked).not.toContain('color');
+	// newlines preserved; non-newline style body chars become spaces
+	expect(blanked.split('\n').length).toBe(code.split('\n').length);
 });
